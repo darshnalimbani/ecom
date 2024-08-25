@@ -1,21 +1,27 @@
 module.exports = (sequelize, Sequelize) => {
-  const User = sequelize.define("User",
+  const User = sequelize.define(
+    "User",
     {
-        username: {
-            type: Sequelize.STRING,
-            unique: true,
-            allowNull: false,
-        },
-        email: {
-            type: Sequelize.STRING,
-            unique: true,
-            allowNull: false,
-        },
-        password: {
-            type: Sequelize.STRING,
-            allowNull: false,
-        },
-    },{ underscored: true, paranoid: true }
+      username: {
+        type: Sequelize.STRING,
+        unique: true,
+        allowNull: false,
+      },
+      email: {
+        type: Sequelize.STRING,
+        unique: true,
+        allowNull: false,
+      },
+      password: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
+      token: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+    },
+    { underscored: true, paranoid: true }
   );
   User.associate = function (models) {
     User.hasMany(models.Cart, {

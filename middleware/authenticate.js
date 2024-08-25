@@ -10,7 +10,6 @@ require("dotenv").config();
 
 const authenticate = async (req, res, next) => {
   try {
-    // Check for auth header from client
     const header = req.headers.authorization;
     if (!header) {
       return res.status(403).json({ error: AUTH_HEADER_MISSING_ERR });
@@ -29,7 +28,7 @@ const authenticate = async (req, res, next) => {
 
     const userId = decoded.user_id;
     let user = await User.findOne({
-      where: { id: userId },
+      where: { id: userId, token: token },
     });
 
     if (!user) {
@@ -42,7 +41,7 @@ const authenticate = async (req, res, next) => {
 
     next();
   } catch (err) {
-    console.error("Authentication Error:", err); // Log the error for debugging
+    console.error("Auth Error:", err);
     res.status(400).json({ error: "Invalid token." });
   }
 };

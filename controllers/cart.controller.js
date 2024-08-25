@@ -17,7 +17,12 @@ exports.addToCart = async (req, res) => {
     } else {
       await Cart.create({ userId, productId, quantity });
     }
-    return res.status(200).json({ message: "Product added to cart" });
+    const cartData = await Cart.findAll({
+      where: { userId },
+      include: [{ model: Product, as: "product" }],
+      attributes: ["id", "productId","quantity"],
+    });
+    return res.status(200).json({ message: "Product added to cart", data: cartData });
   } catch (err) {
     console.log("er", err);
     return res.status(500).json({ error: err.message });
@@ -32,7 +37,15 @@ exports.checkout = async (req, res) => {
   }
   try {
     const { address, phone_number, payment_method } = req.body;
-    
+    const existOrder = await Order.findOne({
+      where: { userId, status: "Placed" },
+    });
+
+    if (existOrder) {
+      return res
+        .status(400)
+        .json({ message: "Already checked-out, now you can place the order." });
+    }
     const cartItems = await Cart.findAll({
       where: { userId },
       include: [{ model: Product, as: "product" }],

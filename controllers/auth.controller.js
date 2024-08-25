@@ -1,5 +1,4 @@
 const bcrypt = require("bcryptjs");
-const pool = require("../config/db");
 const { validationResult } = require("express-validator");
 const { createJwtToken } = require("../utils/token.util");
 const { User, Sequelize } = require("../models");
@@ -30,7 +29,7 @@ exports.signup = async (req, res, next) => {
       password: hashedPassword,
     });
 
-    // JWT token generation
+    // JWT token
     const token = createJwtToken({ user_id: user.id });
     user.token = token;
     return res.status(200).json({
@@ -52,6 +51,7 @@ exports.login = async (req, res, next) => {
       where: {
         email: email.trim(),
       },
+      attributes: ["id", "username","email","password"],
     });
     if (!user) {
       return res.status(401).json({
@@ -73,7 +73,6 @@ exports.login = async (req, res, next) => {
       type: "success",
       message: "You have successfully logged into your account.",
       user: userObject,
-      token: token,
     });
   } catch (err) {
     next(err);
@@ -81,15 +80,14 @@ exports.login = async (req, res, next) => {
 };
 
 exports.logout = async (req, res, next) => {
-  const user_id = req.user.id;
+  const userId = req.user.id;
   try {
-    // Create a new token with a 1-second expiration to invalidate the current token
-    const expiredToken = createJwtToken({ user_id }, "1s");
+    // Clear token from the database
+    await User.update({ token: null }, { where: { id: userId } });
 
     return res.status(200).json({
       type: "success",
-      message: "Logged out successfully. Token will expire in 1 second.",
-      token: expiredToken,
+      message: "Logged out successfully...",
     });
   } catch (err) {
     next(err);

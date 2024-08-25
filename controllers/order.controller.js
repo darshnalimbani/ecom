@@ -1,4 +1,4 @@
-const { Op, fn, col, literal } = require("sequelize");
+const { Op, fn, col, literal, where } = require("sequelize");
 
 const {
   sequelize,
@@ -10,7 +10,7 @@ const {
   User,
 } = require("../models");
 
-exports.placeOrder = async (req, res) => {
+exports.placeOrder = async (req, res, next) => {
   const transaction = await sequelize.transaction();
   const userId = req.user.id;
 
@@ -21,8 +21,8 @@ exports.placeOrder = async (req, res) => {
       order: [["created_at", "DESC"]],
       transaction,
     });
-    if (!order) {
-      return res.status(400).json({ message: "No checkout found" });
+    if (!order || order.status !== "Placed") {
+      return res.status(400).json({ message: "You need to checkout first." });
     }
 
     const cartItems = await Cart.findAll({
@@ -34,8 +34,10 @@ exports.placeOrder = async (req, res) => {
     if (!cartItems || cartItems.length == 0) {
       return res.status(400).json({ message: "Cart is empty" });
     }
-
-    // Add items to order_items and update stock
+    let totalAmount = 0;
+    let totalQuantity = 0;
+    const orderedProducts = [];
+    // Add items to order_items
     for (const item of cartItems) {
       await OrderItem.create(
         {
@@ -47,20 +49,45 @@ exports.placeOrder = async (req, res) => {
         { transaction }
       );
 
-      // Decrement product stock
+      // Decrement the stock
       await Product.update(
         { stock: Sequelize.literal(`stock - ${item.quantity}`) },
         { where: { id: item.product_id }, transaction }
       );
-    }
+      await Order.update(
+        { status: "Completed" },
+        {
+          where: { user_id: userId, status: "Placed" },
+          order: [["created_at", "DESC"]],
+          transaction,
+        }
+      );
+      // totals
+      totalAmount += item.quantity * item.product.price;
+      totalQuantity += item.quantity;
 
+      // Add product details to the summary
+      orderedProducts.push({
+        product_id: item.product.id,
+        name: item.product.name,
+        quantity: item.quantity,
+        price: item.product.price,
+        total: item.quantity * item.product.price,
+      });
+    }
     // Clear the cart
     await Cart.destroy({ where: { userId }, transaction });
     await transaction.commit();
 
     return res.status(201).json({
       type: "success",
-      message: "Order placed successfully",
+      message: "Order placed successfully...",
+      order: {
+        order_id: order.id,
+        total_amount: totalAmount,
+        total_quantity: totalQuantity,
+        products: orderedProducts,
+      },
     });
   } catch (err) {
     await transaction.rollback();
@@ -99,7 +126,7 @@ exports.getOrder = async (req, res) => {
       .status(200)
       .json({
         type: "success",
-        message: "Orders fetched successfully",
+        message: "Orders fetched successfully...",
         data: orders,
       });
   } catch (err) {
@@ -135,7 +162,7 @@ exports.getAllOrders = async (req, res) => {
 
     return res.status(200).json({
       type: "success",
-      message: "Orders fetched successfully",
+      message: "Orders fetched successfully...",
       data: orders,
     });
   } catch (err) {
@@ -143,33 +170,50 @@ exports.getAllOrders = async (req, res) => {
   }
 };
 
-exports.getSecondHighestOrderValue = async (req, res) => {
+exports.getSecondHighestOrderValue = async (req, res, next) => {
   try {
-    // Subquery to get the maximum total_amount
-    const maxTotalAmount = await Order.max('total_amount');
-
+    const maxTotalAmount = await Order.max("total_amount");
     if (maxTotalAmount === null) {
-      return res.status(404).json({ message: 'No orders found' });
+      return res.status(404).json({ message: "No orders found" });
     }
 
-    // Find the maximum total_amount less than the overall maximum
-    const secondHighestOrderValue = await Order.max('total_amount', {
+    const secondHighestOrderValue = await Order.findOne({
       where: {
         total_amount: { [Op.lt]: maxTotalAmount },
       },
+      order: [["total_amount", "DESC"]],
     });
 
-    if (secondHighestOrderValue === null) {
-      return res.status(404).json({ message: 'No second highest order value found' });
+    if (!secondHighestOrderValue) {
+      return res
+        .status(404)
+        .json({ message: "No second highest order value found" });
     }
 
-    res.status(200).json({
-      type: 'success',
-      data: { second_highest_order_value: secondHighestOrderValue },
+    // Fetch order details
+    const orderItems = await OrderItem.findAll({
+      where: { order_id: secondHighestOrderValue.id },
+      include: [{ model: Product, as: "products" }],
+    });
+    const orderDetails = {
+      order_id: secondHighestOrderValue.id,
+      total_amount: secondHighestOrderValue.totalAmount,
+      created_at: secondHighestOrderValue.created_at,
+      products: orderItems.map((item) => ({
+        product_id: item.product_id,
+        quantity: item.quantity,
+        price: item.price,
+        total: item.quantity * item.price,
+      })),
+    };
+
+    return res.status(200).json({
+      type: "success",
+      data: { second_highest_order: orderDetails },
     });
   } catch (err) {
-    console.error('Error fetching second highest order value:', err);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error("Error fetching second highest order value:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 };
 
@@ -177,18 +221,16 @@ exports.getMonthlyOrdersAnalysis = async (req, res) => {
   try {
     const monthlyAnalysis = await Order.findAll({
       attributes: [
-        [
-          fn("EXTRACT", literal("MONTH FROM order_date")),
-          "month",
-        ],
+        [fn("TO_CHAR", literal("order_date, 'Month'")), "month_name"],
+        [fn("EXTRACT", literal("MONTH FROM order_date")), "month"],
         [fn("COUNT", col("id")), "total_orders"],
-        [fn("SUM", col("total_amount")), "total_revenue"],
+        [fn("COALESCE", fn("SUM", col("total_amount")), 0), "total_revenue"],
       ],
-      where: (
+      where: Sequelize.where(
         fn("EXTRACT", literal("YEAR FROM order_date")),
         2024
       ),
-      group: ["month"],
+      group: ["month_name", "month"],
       order: [["month", "ASC"]],
     });
 
@@ -201,98 +243,3 @@ exports.getMonthlyOrdersAnalysis = async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
-
-// exports.getUserOrderSummary = async (req, res) => {
-//   try {
-//     const userSummary = await User.findAll({
-//       attributes: [
-//         "id AS user_id",
-//         "username",
-//         [fn("COUNT", col("orders.id")), "total_orders"],
-//         [
-//           fn("SUM", col("order_items.quantity")),
-//           "total_products",
-//         ],
-//         [
-//           fn("SUM", col("orders.total_amount")),
-//           "total_order_value",
-//         ],
-//       ],
-//       include: [
-//         {
-//           model: Order,
-//           as: "orders",
-//           include: [
-//             {
-//               model: OrderItem,
-//               as: "order",
-//             },
-//           ],
-//         },
-//       ],
-//       group: ["User.id", "User.username"],
-//     });
-
-//     res.status(200).json({
-//       type: "success",
-//       data: userSummary,
-//     });
-//   } catch (err) {
-//     console.error("Error fetching user-wise ordering summary:", err);
-//     res.status(500).json({ error: "Internal Server Error" });
-//   }
-// };
-
-// exports.getLowSalesProducts = async (req, res) => {
-//   try {
-//     const lowSalesProducts = await Product.findAll({
-//       attributes: [
-//         // "id AS product_id",
-//         "name",
-//         [
-//           fn(
-//             "COALESCE",
-//             fn("SUM", col("order_items.quantity")),
-//             0
-//           ),
-//           "total_quantity_sold",
-//         ],
-//       ],
-//       include: [
-//         {
-//           model: OrderItem,
-//           as: "products",
-//           include: [
-//             {
-//               model: Order,
-//               as: "orders",
-//               where: {
-//                 order_date: {
-//                   [Op.between]: ["2023-10-01", "2023-12-31"],
-//                 },
-//               },
-//             },
-//           ],
-//         },
-//       ],
-//       group: ["Product.id"],
-//       having: (
-//         fn(
-//           "COALESCE",
-//           fn("SUM", col("order_items.quantity")),
-//           0
-//         ),
-//         "<",
-//         3
-//       ),
-//     });
-
-//     res.status(200).json({
-//       type: "success",
-//       data: lowSalesProducts,
-//     });
-//   } catch (err) {
-//     console.error("Error fetching low sales products:", err);
-//     res.status(500).json({ error: "Internal Server Error" });
-//   }
-// };
