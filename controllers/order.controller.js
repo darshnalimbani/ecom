@@ -228,7 +228,7 @@ exports.getMonthlyOrdersAnalysis = async (req, res) => {
       ],
       where: Sequelize.where(
         fn("EXTRACT", literal("YEAR FROM order_date")),
-        2024
+        2023
       ),
       group: ["month_name", "month"],
       order: [["month", "ASC"]],
